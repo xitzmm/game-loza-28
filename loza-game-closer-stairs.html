@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Loza's Jump — Simple Cat Platformer</title>
+  <style>
+    :root{
+      --bg1: #BFE9FF;
+      --bg2: #FFE4F5;
+      --ground: #5C3D2E;
+      --player: #FFB3B3;
+      --monster: #9ECB9E;
+      --accent: #FF6B9A;
+      --text: #2b2b2b;
+    }
+    html,body{height:100%;margin:0}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg1),var(--bg2));font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;color:var(--text)}
+    #gameWrap{width:100%;max-width:1100px;height:640px;background:linear-gradient(180deg,rgba(255,255,255,0.35),rgba(255,255,255,0.06));box-shadow:0 10px 30px rgba(0,0,0,0.12);border-radius:12px;overflow:hidden;position:relative}
+    canvas{display:block;width:100%;height:100%}
+    #hud{position:absolute;left:12px;top:12px;background:rgba(255,255,255,0.7);backdrop-filter:blur(4px);padding:8px 12px;border-radius:10px;font-weight:600}
+    #msg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:white;padding:18px 22px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.25);display:none;z-index:10;text-align:center;max-width:90%}
+    #msg button{margin-top:10px;padding:8px 14px;border-radius:8px;border:0;background:var(--accent);color:white;font-weight:700;cursor:pointer}
+    #footer{position:absolute;right:12px;bottom:12px;background:rgba(255,255,255,0.7);padding:8px 12px;border-radius:10px;font-size:13px}
+    .small{font-size:13px;font-weight:500}
+    @media (max-width:520px){ #hud{font-size:13px} #footer{font-size:12px} }
+  </style>
+</head>
+<body>
+  <div id="gameWrap" role="application" aria-label="Loza platformer game">
+    <canvas id="c" tabindex="0"></canvas>
+    <div id="hud">Controls: ← →  •  ↑ or Space = Jump</div>
+    <div id="footer" class="small">Loza's Jump — 5 obstacles — Monsters: ahmed taha</div>
+    <div id="msg" role="dialog" aria-modal="true">
+      <div id="msgText"></div>
+      <button id="restartBtn">Restart</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = 1100, H = 640;
+  function resize(){
+    const rect = canvas.getBoundingClientRect();
+    W = Math.floor(rect.width) || 1100;
+    H = Math.floor(rect.height) || 640;
+    canvas.width = W;
+    canvas.height = H;
+  }
+  function fitCanvas(){
+    const wrap = document.getElementById('gameWrap');
+    const rect = wrap.getBoundingClientRect();
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    resize();
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  const gravity = 1.2;
+  const groundHeight = 100;
+  const groundY = () => H - groundHeight;
+
+  const player = {
+    x: 80, y: 0, w: 56, h: 56,
+    vx: 0, vy: 0, speed: 5, jumpForce: 18, onGround: false,
+    color: '#FFB3B3'
+  };
+
+  const levelLength = 3200;
+  const platforms = [];
+  const monsters = [];
+
+  const cam = { x: 0 };
+  const heart = { x: 0, y: 0, r: 28 };
+
+  
+  function buildLevel(){
+    platforms.length = 0; monsters.length = 0;
+    platforms.push({ x:0, y:groundY(), w: levelLength, h: groundHeight });
+
+    const spacing = 220; // closer obstacles
+    const numObstacles = 10; // more obstacles for smooth climb
+    for(let i=0; i<numObstacles; i++){
+      const pw = 160;
+      const ph = 18;
+      const px = 200 + i * spacing;
+      const py = groundY() - (i+1) * 60; // smaller rise each step for smoother climb
+      platforms.push({ x:px, y:py, w:pw, h:ph });
+
+      const monsterWidth = pw * 0.25;
+      const monsterHeight = 30;
+      const mx = px + pw/2 - monsterWidth/2;
+      const my = py - monsterHeight;
+      monsters.push({ x: mx + monsterWidth/2, y: my + monsterHeight/2, w: monsterWidth, h: monsterHeight, name: 'ahmed taha' });
+    }
+
+    heart.x = 200 + (numObstacles-1) * spacing + 100;
+    heart.y = groundY() - (numObstacles) * 60 - 50;
+  }
+  buildLevel();
+
+
+  const keys = {};
+  window.addEventListener('keydown', e => { keys[e.code] = true; if(['ArrowUp','Space'].includes(e.code)) e.preventDefault(); });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  function rectsCollide(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function resetPlayer(){
+    player.x = 80; player.y = 0; player.vx = 0; player.vy = 0; cam.x = 0;
+  }
+
+  const msg = document.getElementById('msg');
+  const msgText = document.getElementById('msgText');
+  const restartBtn = document.getElementById('restartBtn');
+  restartBtn.addEventListener('click', () => { msg.style.display = 'none'; resetPlayer(); });
+
+  function showWin(){
+    msgText.innerHTML = '<strong>Loza, I will miss u — enjoy my love 💖</strong>';
+    msg.style.display = 'block';
+  }
+
+  let last = performance.now();
+  function loop(t){
+    const dt = Math.min(32, t - last);
+    last = t;
+    update(dt/16);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function update(step){
+    if(keys['ArrowLeft']){ player.vx = -player.speed; }
+    else if(keys['ArrowRight']){ player.vx = player.speed; }
+    else { player.vx = 0; }
+
+    if((keys['ArrowUp'] || keys['Space']) && player.onGround){
+      player.vy = -player.jumpForce;
+      player.onGround = false;
+    }
+
+    player.vy += gravity;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    player.onGround = false;
+    for(const p of platforms){
+      if(player.x + player.w > p.x && player.x < p.x + p.w){
+        const playerBottom = player.y + player.h;
+        if(playerBottom > p.y && playerBottom - player.vy <= p.y){
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+    }
+
+    if(player.x < 0) player.x = 0;
+    if(player.x + player.w > levelLength) player.x = levelLength - player.w;
+
+    for(const m of monsters){
+      const monRect = { x: m.x - m.w/2, y: m.y - m.h/2, w: m.w, h: m.h };
+      const playerRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      if(rectsCollide(playerRect, monRect)) resetPlayer();
+    }
+
+    const heartRect = { x: heart.x - heart.r, y: heart.y - heart.r, w: heart.r*2, h: heart.r*2 };
+    if(rectsCollide({ x: player.x, y: player.y, w: player.w, h: player.h }, heartRect)){
+      showWin();
+    }
+
+    const targetCamX = player.x - W/2 + player.w/2;
+    cam.x += (targetCamX - cam.x) * 0.12;
+    if(cam.x < 0) cam.x = 0;
+    if(cam.x > levelLength - W) cam.x = levelLength - W;
+  }
+
+  function drawPill(x,y,w,h, fillStyle, strokeStyle){
+    const r = h/2;
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+    if(strokeStyle){ ctx.strokeStyle = strokeStyle; ctx.stroke(); }
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#DFF6FF');
+    g.addColorStop(1,'#FFEAF3');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    ctx.save();
+    ctx.translate(-Math.round(cam.x), 0);
+
+    for(const p of platforms){
+      ctx.fillStyle = '#6B4F4F';
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+    }
+
+    for(const m of monsters){
+      drawPill(m.x - m.w/2, m.y - m.h/2, m.w, m.h, '#9ecb9e', '#6aa86a');
+      ctx.fillStyle = '#333';
+      ctx.font = '14px system-ui,Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(m.name, m.x, m.y - m.h/2 - 8);
+    }
+
+    ctx.save();
+    ctx.translate(heart.x, heart.y);
+    ctx.beginPath();
+    ctx.moveTo(0, -10);
+    ctx.bezierCurveTo(20, -50, 60, -10, 0, 30);
+    ctx.bezierCurveTo(-60, -10, -20, -50, 0, -10);
+    ctx.closePath();
+    ctx.fillStyle = '#ff6b9a';
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = player.color;
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(player.x + 12, player.y + 18, 6, 8);
+    ctx.fillRect(player.x + player.w - 18, player.y + 18, 6, 8);
+    ctx.beginPath();
+    ctx.moveTo(player.x + 6, player.y + 2);
+    ctx.lineTo(player.x + 16, player.y + 12);
+    ctx.lineTo(player.x + 2, player.y + 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(player.x + player.w - 6, player.y + 2);
+    ctx.lineTo(player.x + player.w - 16, player.y + 12);
+    ctx.lineTo(player.x + player.w - 2, player.y + 12);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#000';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Loza', player.x + player.w/2, player.y - 8);
+
+    ctx.restore();
+  }
+
+  player.y = 0;
+  requestAnimationFrame(loop);
+  canvas.addEventListener('click', ()=> canvas.focus());
+  canvas.focus();
+})();
+</script>
+</body>
+</html>
